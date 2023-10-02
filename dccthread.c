@@ -19,8 +19,17 @@ static dccthread_t *manager_thread; // Thread gerente
 /* Lista de threads prontas para execução */
 static struct dlist *ready_threads;
 
-/* Declaração da função da thread gerente que gerencia as threads */
-static void manager_function(int param);
+static void manager_function(int param) {
+    /* Verifica se existem threads prontas para executar */
+    while (!dlist_empty(ready_threads)) {
+        /* Obtém a próxima thread da lista de threads prontas */
+        dccthread_t *next_thread = dlist_pop_left(ready_threads);
+
+        /* Coloca essa thread para executar */
+        current_thread = next_thread;
+        swapcontext(&(manager_thread->context), &(next_thread->context));
+    }
+}
 
 void dccthread_init(void (*func)(int), int param) {
     /* Inicializa a lista de threads a ser executada, inicialmente vazia */
@@ -86,14 +95,22 @@ const char *dccthread_name(dccthread_t *tid) {
     return tid->name;
 }
 
-void manager_function(int param) {
-    /* Verifica se existem threads prontas para executar */
-    while (!dlist_empty(ready_threads)) {
-        /* Obtém a próxima thread da lista de threads prontas */
-        dccthread_t *next_thread = dlist_pop_left(ready_threads);
+void dccthread_exit(void) {
+    /* Marca a thread atual como terminada */
+    current_thread->finished = 1;
 
-        /* Coloca essa thread para executar */
-        current_thread = next_thread;
-        swapcontext(&(manager_thread->context), &(next_thread->context));
+    /* Chama a função do gerente para escolher a próxima thread a ser executada */
+    setcontext(&(manager_thread->context));
+}
+
+void dccthread_wait(dccthread_t *tid) {
+    /* Verifica se a thread já terminou */
+    if (tid->finished) {
+        return;
     }
+
+    /* Se a thread ainda não terminou, coloca a thread atual na lista de threads prontas e chama o gerente */
+    dlist_push_right(ready_threads, current_thread);
+    current_thread = NULL;
+    setcontext(&(manager_thread->context));
 }
