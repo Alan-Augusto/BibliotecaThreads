@@ -13,6 +13,8 @@ struct dccthread {
     ucontext_t context;
     char name[DCCTHREAD_MAX_NAME_SIZE];
     int finished;
+    int sleep;
+    timer_t timer_id;
 };
 
 static dccthread_t main_thread; // Thread principal
@@ -176,18 +178,67 @@ void dccthread_wait(dccthread_t *thread) {
     sigprocmask(SIG_BLOCK, &mask, NULL);
 
     /* Verifica se a thread já terminou */
-    if (thread->finished) {
+    while (!thread->finished) {
+        /* Se a thread ainda não terminou, coloca a thread atual na lista de threads prontas e chama o gerente */
+        dlist_push_right(ready_threads, current_thread);
+        dccthread_t *prev_thread = current_thread;
+        current_thread = NULL;
+        swapcontext(&(prev_thread->context), &(manager_thread->context));
+
         /* Desbloqueia o sinal SIGALRM */
         sigprocmask(SIG_UNBLOCK, &mask, NULL);
-        return;
     }
-
-    /* Se a thread ainda não terminou, coloca a thread atual na lista de threads prontas e chama o gerente */
-    dlist_push_right(ready_threads, current_thread);
-    dccthread_t *prev_thread = current_thread;
-    current_thread = NULL;
-    swapcontext(&(prev_thread->context), &(manager_thread->context));
 
     /* Desbloqueia o sinal SIGALRM */
     sigprocmask(SIG_UNBLOCK, &mask, NULL);
+    return;
+}
+
+void wake_up_thread(int signum, siginfo_t *info, void *context) {
+    /* Após temporizador, "acorda" a thread */
+    dccthread_t *thread = info->si_value.sival_ptr;
+    thread->sleep = 0;
+}
+
+void dccthread_sleep(struct timespec ts) {
+    /* Coloca a thread para "dormir" e ativa o temporizador*/
+    current_thread->sleep = 1;
+
+    struct sigaction sa;
+    sa.sa_flags = SA_SIGINFO;
+    sa.sa_sigaction = wake_up_thread;
+
+    if (sigaction(SIGUSR1, &sa, NULL) == -1) {
+        perror("sigaction");
+        exit(EXIT_FAILURE);
+    }
+
+    /* Configura a estrutura para a criação do temporizador */
+    struct sigevent sev;
+    sev.sigev_notify = SIGEV_SIGNAL;
+    sev.sigev_signo = SIGUSR1;
+    sev.sigev_value.sival_ptr = current_thread;
+    
+    /* Cria o temporizador usando CLOCK_REALTIME */
+    if (timer_create(CLOCK_REALTIME, &sev, &current_thread->timer_id) == -1) {
+        printf("Erro ao criar o temporizador!\n");
+        exit(EXIT_FAILURE);
+    }
+    
+    /* Configura o temporizador para disparar após o tempo especificado em ts */
+    struct itimerspec its;
+    its.it_value.tv_sec = ts.tv_sec;
+    its.it_value.tv_nsec = ts.tv_nsec;
+    its.it_interval.tv_sec = 0;  // Não repetir o temporizador
+    its.it_interval.tv_nsec = 0;
+
+    /* Inicia o temporizador */
+    if (timer_settime(current_thread->timer_id, 0, &its, NULL) == -1) {
+        printf("Erro ao iniciar o temporizador!\n");
+        exit(EXIT_FAILURE);
+    }
+
+    while(current_thread->sleep){
+        /* Thread segue ativa */
+    }
 }
